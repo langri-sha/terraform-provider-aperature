@@ -79,7 +79,27 @@ terraform fmt -recursive examples/
 
 # Generate docs (once tfplugindocs is wired up)
 go generate ./...
+
+# Release to TFC private provider registry
+op run --env-file=.tfc-release.env -- scripts/tfc-release.sh 0.1.0
 ```
+
+## Releasing
+
+The provider is distributed via TFC private providers, not the public
+registry, while upstream is pre-alpha. `scripts/tfc-release.sh` does
+the build/sign/upload dance end-to-end. Required env (template in
+`.tfc-release.env.example`):
+
+- `TFC_ORG`, `TFC_TOKEN` — TFC org and a user/team token with
+  registry-providers write permission.
+- `GPG_KEY_ID` — 40-char fingerprint of the signing key. The secret
+  key must be importable locally; bootstrap from 1Password:
+  `op read 'op://Rashadnyk/Aperature TFC Provider Signing Key/private_key' | gpg --import`.
+
+Provider uses no encryption subkey by design (sign-only). Don't
+recreate it — the fingerprint is referenced in `versions.tf`
+consumers.
 
 ## Pre-alpha caveats
 

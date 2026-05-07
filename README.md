@@ -91,6 +91,33 @@ To run examples against a local build, see
 [`examples/README.md`](./examples/README.md) for the dev override
 incantation.
 
+## Release to a Terraform Cloud private provider
+
+Because the upstream API is pre-alpha, the provider is not (yet)
+published to the public Terraform Registry. Distribute it via TFC's
+private-provider registry instead:
+
+```sh
+cp .tfc-release.env.example .tfc-release.env   # gitignored
+# edit if your org or vault layout differs
+op run --env-file=.tfc-release.env -- scripts/tfc-release.sh 0.1.0
+```
+
+`scripts/tfc-release.sh` builds zips for the popular platforms,
+generates `SHA256SUMS`, signs it with the configured GPG key, and
+uploads everything to `app.terraform.io/<org>/aperature/<version>`.
+After it succeeds, consumers pin via:
+
+```hcl
+aperature = {
+  source  = "app.terraform.io/<org>/aperature"
+  version = "~> 0.1"
+}
+```
+
+The signing key fingerprint must already be registered in the TFC
+org's GPG keys; the script handles registration idempotently.
+
 ## License
 
 Apache 2.0. See [`LICENSE`](./LICENSE).

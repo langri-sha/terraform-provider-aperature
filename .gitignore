@@ -32,3 +32,4 @@ override.tf.json
 # Local env
 .env
 .envrc
+.tfc-release.env
