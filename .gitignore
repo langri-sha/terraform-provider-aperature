@@ -1,0 +1,34 @@
+# Build artifacts
+/terraform-provider-aperature
+/dist/
+*.exe
+*.test
+*.out
+
+# Go
+/vendor/
+
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Local env
+.env
+.envrc
