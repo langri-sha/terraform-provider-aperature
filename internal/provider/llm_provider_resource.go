@@ -52,7 +52,7 @@ func (r *llmProviderResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"cost_basis":    schema.StringAttribute{Optional: true},
 			"preference":    schema.Int64Attribute{Optional: true},
 			"disabled":      schema.BoolAttribute{Optional: true},
-			"add_headers":   schema.MapAttribute{ElementType: types.StringType, Optional: true},
+			"add_headers":   schema.MapAttribute{ElementType: types.StringType, Optional: true, Sensitive: true},
 		},
 	}
 }
