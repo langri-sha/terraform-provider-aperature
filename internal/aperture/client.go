@@ -1,71 +1,228 @@
-// Package aperture is a thin HTTP client for the Aperture admin API.
+// Package aperture is the HTTP client for the Aperture admin API.
 //
-// As of 2026-05 Aperture does not expose a public administrative HTTP
-// API; configuration is a single JSON document edited via the
-// dashboard's JSON editor or supplied to aperture-cli. This package
-// therefore exists as a placeholder: the public surface is settled
-// (Config, NewClient, Do) so consumers can compile against it, but
-// every Do() call returns ErrAPINotPublic until the upstream API
-// arrives. When that happens, fill in Do (and add typed helpers like
-// GetConfig, PutConfig) without changing the package boundary.
+// API surface (see /aperture/openapi.json on a live gateway):
+//
+//	GET  /config            -> {config: <hujson>}, ETag header
+//	PUT  /config            -> If-Match required; replaces document
+//	POST /config:validate   -> {valid, errors}
+//
+// Auth is by Tailscale identity at the network layer — the caller
+// must be on the tailnet with the admin role grant. This package
+// therefore sends no Authorization header.
 package aperture
 
 import (
-	"crypto/tls"
+	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/tailscale/hujson"
 )
 
-// ErrAPINotPublic is returned from every Do() call until Tailscale
-// publishes an Aperture management API.
-var ErrAPINotPublic = errors.New("aperture: management API is not yet public; configure via the Aperture dashboard JSON editor or aperture-cli")
+// ErrPreconditionFailed is returned from SetConfig when the gateway's
+// stored ETag doesn't match the one we sent. The caller should
+// re-Read and re-plan.
+var ErrPreconditionFailed = errors.New("aperture: configuration changed since last read; re-plan required")
 
-// Config configures a Client.
-type Config struct {
-	Endpoint  string
-	AuthToken string
-	Insecure  bool
+// ClientConfig configures a Client. Only Endpoint is required.
+type ClientConfig struct {
+	// Endpoint is the full base URL including the /aperture path
+	// prefix, e.g. "http://ai.tail396699.ts.net/aperture".
+	Endpoint string
+
 	UserAgent string
+
+	// HTTPClient is optional; a sensible default is used when nil.
+	HTTPClient *http.Client
 }
 
-// Client talks to the Aperture admin endpoint.
+// Client talks to an Aperture admin endpoint over HTTP.
 type Client struct {
-	cfg  Config
+	cfg  ClientConfig
 	http *http.Client
 }
 
-// NewClient returns a configured Client. Endpoint and AuthToken may be
-// empty: Do() simply returns ErrAPINotPublic regardless until upstream
-// catches up, and we want practitioners to be able to instantiate the
-// provider without an endpoint just to use the offline data sources.
-func NewClient(cfg Config) *Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if cfg.Insecure {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+// NewClient returns a configured Client. Endpoint may be empty, in
+// which case every method returns a clear error — this lets the
+// provider instantiate a Client without forcing endpoint discovery
+// at provider Configure time.
+func NewClient(cfg ClientConfig) *Client {
+	httpClient := cfg.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &Client{
-		cfg: cfg,
-		http: &http.Client{
-			Transport: transport,
-			Timeout:   30 * time.Second,
-		},
-	}
+	return &Client{cfg: cfg, http: httpClient}
 }
 
 // Endpoint returns the configured endpoint, or "" if none was set.
 func (c *Client) Endpoint() string { return c.cfg.Endpoint }
 
-// HasCredentials reports whether both endpoint and auth token are set.
-// Resources that require live API access can short-circuit with a
-// helpful error when this is false.
-func (c *Client) HasCredentials() bool {
-	return c.cfg.Endpoint != "" && c.cfg.AuthToken != ""
+// configEnvelope wraps a HuJSON config string in the {config: ...}
+// shape that GetConfig/SetConfig/ValidateConfig all use.
+type configEnvelope struct {
+	Config string `json:"config"`
 }
 
-// Do is the single execution point for HTTP calls. Today it always
-// returns ErrAPINotPublic. Once the upstream API ships, replace this
-// body with a real round-trip that injects User-Agent and Authorization.
-func (c *Client) Do(_ *http.Request) (*http.Response, error) {
-	return nil, ErrAPINotPublic
+// ValidationResult mirrors the upstream ValidationResult schema.
+type ValidationResult struct {
+	Valid  bool     `json:"valid"`
+	Errors []string `json:"errors"`
+}
+
+// GetConfig returns the current Aperture configuration as a
+// HuJSON string and its ETag. API keys are redacted server-side;
+// don't trust the apikey/authorization fields from this response.
+func (c *Client) GetConfig(ctx context.Context) (config string, etag string, err error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/config", nil)
+	if err != nil {
+		return "", "", err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", c.problemError(resp)
+	}
+	var env configEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		return "", "", fmt.Errorf("aperture: decode get-config: %w", err)
+	}
+	return env.Config, resp.Header.Get("ETag"), nil
+}
+
+// SetConfig replaces the entire Aperture configuration. ifMatch must
+// be the ETag from a prior GetConfig (the API requires it). On 412,
+// returns ErrPreconditionFailed.
+func (c *Client) SetConfig(ctx context.Context, config, ifMatch string) (saved string, etag string, err error) {
+	body, err := json.Marshal(configEnvelope{Config: config})
+	if err != nil {
+		return "", "", err
+	}
+	req, err := c.newRequest(ctx, http.MethodPut, "/config", bytes.NewReader(body))
+	if err != nil {
+		return "", "", err
+	}
+	if ifMatch != "" {
+		req.Header.Set("If-Match", ifMatch)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var env configEnvelope
+		if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+			return "", "", fmt.Errorf("aperture: decode set-config: %w", err)
+		}
+		return env.Config, resp.Header.Get("ETag"), nil
+	case http.StatusPreconditionFailed:
+		return "", "", ErrPreconditionFailed
+	default:
+		return "", "", c.problemError(resp)
+	}
+}
+
+// ValidateConfig POSTs /config:validate. Network or server errors
+// surface as Go errors; a structurally-bad config returns a non-nil
+// result with valid=false and a populated Errors slice.
+func (c *Client) ValidateConfig(ctx context.Context, config string) (*ValidationResult, error) {
+	body, err := json.Marshal(configEnvelope{Config: config})
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(ctx, http.MethodPost, "/config:validate", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.problemError(resp)
+	}
+	var vr ValidationResult
+	if err := json.NewDecoder(resp.Body).Decode(&vr); err != nil {
+		return nil, fmt.Errorf("aperture: decode validate-config: %w", err)
+	}
+	return &vr, nil
+}
+
+// ParseConfigDocument parses a HuJSON config string returned by
+// GetConfig into the typed Config struct. HuJSON allows comments and
+// trailing commas; we strip those via hujson.Standardize before
+// json.Unmarshal so callers don't have to depend on the hujson
+// package directly.
+func ParseConfigDocument(s string) (*Config, error) {
+	pure, err := hujson.Standardize([]byte(s))
+	if err != nil {
+		return nil, fmt.Errorf("aperture: standardize hujson: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(pure, &cfg); err != nil {
+		return nil, fmt.Errorf("aperture: unmarshal config: %w", err)
+	}
+	return &cfg, nil
+}
+
+// MarshalConfigDocument returns a JSON-encoded form of the Config
+// suitable for SetConfig. JSON is a strict subset of HuJSON, so we
+// emit JSON to keep things deterministic — comment preservation can
+// come later if it turns out to matter.
+func MarshalConfigDocument(c *Config) (string, error) {
+	out, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	if c.cfg.Endpoint == "" {
+		return nil, errors.New("aperture: endpoint not configured")
+	}
+	endpoint := strings.TrimRight(c.cfg.Endpoint, "/")
+	req, err := http.NewRequestWithContext(ctx, method, endpoint+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if c.cfg.UserAgent != "" {
+		req.Header.Set("User-Agent", c.cfg.UserAgent)
+	}
+	return req, nil
+}
+
+// problemError consumes the response body and returns an error formed
+// from an RFC 9457 Problem Details document, falling back to a plain
+// HTTP error when the body isn't problem+json.
+func (c *Client) problemError(resp *http.Response) error {
+	raw, _ := io.ReadAll(resp.Body)
+	var pd struct {
+		Title  string `json:"title"`
+		Detail string `json:"detail"`
+		Status int    `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &pd); err == nil && pd.Title != "" {
+		msg := pd.Title
+		if pd.Detail != "" {
+			msg = msg + ": " + pd.Detail
+		}
+		return fmt.Errorf("aperture %d: %s", pd.Status, msg)
+	}
+	return fmt.Errorf("aperture: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 }

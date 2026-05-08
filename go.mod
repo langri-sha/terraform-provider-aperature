@@ -2,7 +2,10 @@ module github.com/langri-sha/aperature
 
 go 1.25.0
 
-require github.com/hashicorp/terraform-plugin-framework v1.19.0
+require (
+	github.com/hashicorp/terraform-plugin-framework v1.19.0
+	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
+)
 
 require (
 	github.com/fatih/color v1.18.0 // indirect
