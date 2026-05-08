@@ -6,24 +6,52 @@ once docs generation is wired up.
 
 ```
 provider/                          provider block example -> docs/index.md
-data-sources/<name>/data-source.tf -> docs/data-sources/<name>.md
 resources/<name>/resource.tf       -> docs/resources/<name>.md
+quickstart/                        end-to-end tailscale + aperature setup
 ```
+
+## Quickstart
+
+[`quickstart/`](./quickstart) is the smallest correct configuration:
+a tailnet ACL declaring `tag:ai-aperture`, the Aperture provider
+pointed at `http://ai.<tailnet>/aperture`, and one
+`aperature_config` resource with a single LLM provider and a
+developer grant. Read that first if you've never used the provider.
 
 ## Running against a local build
 
-The provider is not published to a registry yet. Use a `dev_overrides`
-block in `~/.terraformrc`:
+The provider isn't on the public Terraform Registry. Two options:
 
-```hcl
-provider_installation {
-  dev_overrides {
-    "langri-sha/aperature" = "/path/to/aperature/dist"
-  }
-  direct {}
-}
+1. **TFC private provider.** `app.terraform.io/<org>/aperature` — see
+   [`scripts/tfc-release.sh`](../scripts/tfc-release.sh).
+2. **Local `dev_overrides`.** Build the binary and point a
+   `~/.terraformrc` at it:
+
+   ```hcl
+   provider_installation {
+     dev_overrides {
+       "langri-sha/aperature" = "/path/to/aperature/dist"
+     }
+     direct {}
+   }
+   ```
+
+   Then `go build -o dist/terraform-provider-aperature ./cmd/terraform-provider-aperature`
+   and run `terraform plan` from any of the example directories.
+   Skip `terraform init` — dev overrides bypass the lock file.
+
+## Importing an existing live config
+
+```sh
+# Pre-create a stub block:
+cat > main.tf <<'EOF'
+resource "aperature_config" "main" {}
+EOF
+
+terraform import aperature_config.main default
 ```
 
-Then `go build -o dist/terraform-provider-aperature ./cmd/terraform-provider-aperature`
-and run `terraform plan` from any of the example directories. Skip
-`terraform init` — dev overrides bypass the lock file.
+The post-import Read pulls the entire HuJSON document from the
+gateway and populates state. API keys come back redacted, so
+fill in `apikey = ...` in HCL pointing at your secret store before
+running `terraform plan`.
