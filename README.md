@@ -109,8 +109,8 @@ While the provider is pre-1.0 it ships via TFC's private-provider
 registry rather than the public one:
 
 ```sh
-cp .tfc-release.env.example .tfc-release.env   # gitignored
-# edit if your org or vault layout differs
+# Create .tfc-release.env (gitignored) with TFC_ORG, TFC_TOKEN, GPG_KEY_ID.
+# See scripts/tfc-release.sh for the full variable reference.
 op run --env-file=.tfc-release.env -- scripts/tfc-release.sh 0.2.0
 ```
 

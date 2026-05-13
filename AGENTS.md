@@ -107,8 +107,8 @@ op run --env-file=.tfc-release.env -- scripts/tfc-release.sh 0.2.0
 
 The provider is distributed via TFC private providers, not the public
 registry, while it's pre-1.0. `scripts/tfc-release.sh` does the
-build/sign/upload dance end-to-end. Required env (template in
-`.tfc-release.env.example`):
+build/sign/upload dance end-to-end. Required env vars — documented
+in `scripts/tfc-release.sh` — set in `.tfc-release.env` (gitignored):
 
 - `TFC_ORG`, `TFC_TOKEN` — TFC org and a user/team token with
   registry-providers write permission.
