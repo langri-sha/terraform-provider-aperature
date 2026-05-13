@@ -1,5 +1,7 @@
 # terraform-provider-aperature
 
+[![Test](https://github.com/langri-sha/terraform-provider-aperature/actions/workflows/test.yml/badge.svg)](https://github.com/langri-sha/terraform-provider-aperature/actions/workflows/test.yml)
+
 A Terraform provider for [Aperture by Tailscale](https://tailscale.com/docs/aperture),
 the AI gateway that brokers LLM requests for a tailnet.
 
@@ -123,6 +125,22 @@ aperature = {
   version = "~> 0.2"
 }
 ```
+
+## Contributing
+
+Bug reports and pull requests are welcome. Please open an issue first to discuss
+major changes. The only hard rules:
+
+- All Go code passes `go vet ./...` and `go test -race ./...`.
+- All Terraform examples pass `terraform fmt -check -recursive examples`.
+- Commits are conventional (`feat:`, `fix:`, `chore:`, etc.).
+
+For provider development, see the `Development` section above and
+[`examples/README.md`](./examples/README.md) for the `dev_overrides` workflow.
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md).
 
 ## License
 
